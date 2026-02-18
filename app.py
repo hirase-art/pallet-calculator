@@ -107,17 +107,19 @@ def calculate_pallet_plan(input_data_dict, limit_h, pallet_h):
         pattern = get_best_layer_pattern(PALLET_W, PALLET_D, data['L'], data['W'])
         
         total_qty = data['QTY']
-        if total_qty <= 0: continue # 数量0はスキップ
+        if total_qty <= 0: continue 
 
         per_layer = pattern['count']
-        if per_layer == 0: continue # パレットに乗らないサイズ
+        if per_layer == 0: continue 
 
         full_layers = total_qty // per_layer
         remainder = total_qty % per_layer
         
+        # 【修正箇所】ここに 'total_qty' を追加しました
         item_specs[name] = {
             'h': data['H'], 'color': data['Color'], 'pattern': pattern,
-            'orig_l': data['L'], 'orig_w': data['W']
+            'orig_l': data['L'], 'orig_w': data['W'],
+            'total_qty': total_qty 
         }
         
         for _ in range(full_layers):
@@ -152,11 +154,10 @@ def create_figure(pallets, item_specs):
     if n_pallets == 0:
         return None
 
-    # Figure設定
-    fig = plt.figure(figsize=(max(n_pallets*4, 8), 10)) # 少し幅広に調整
+    fig = plt.figure(figsize=(max(n_pallets*4, 8), 10))
     gs = fig.add_gridspec(2, max(n_pallets, n_items), height_ratios=[1, 2.5])
     
-    # --- A. 天面図 ---
+    # --- A. 天面図 (Top View) の修正 ---
     col_idx = 0
     for name, spec in item_specs.items():
         ax = fig.add_subplot(gs[0, col_idx])
@@ -176,20 +177,29 @@ def create_figure(pallets, item_specs):
         start_x = 50 + (1100 - total_w) / 2
         start_y = 50 + (1100 - total_d) / 2
         
+        # 【修正】総数量を超えたら描画を止めるカウンター
+        drawn_count = 0
+        total_item_qty = spec['total_qty']
+
         for c in range(pat['cols']):
             for r in range(pat['rows']):
+                # もし「これ以上箱がない」ならループを抜ける
+                if drawn_count >= total_item_qty:
+                    break
+                
                 ax.add_patch(patches.Rectangle(
                     (start_x + c*box_w, start_y + r*box_d), 
                     box_w, box_d, 
                     facecolor=spec['color'], edgecolor='black', lw=1, alpha=0.7
                 ))
+                drawn_count += 1
         
         info_txt = f"{pat['cols']}x{pat['rows']}={pat['count']}cs/段"
         if pat['rotated']: info_txt += "\n(90°回転)"
         ax.text(600, 0, info_txt, ha='center', va='top', fontsize=9)
         col_idx += 1
 
-# --- B. 側面図 ---
+    # --- B. 側面図 (Side View) の修正 ---
     for i, pallet in enumerate(pallets):
         ax = fig.add_subplot(gs[1, i])
         ax.set_title(f"Pallet #{i+1}", fontsize=12, fontweight='bold')
@@ -206,7 +216,7 @@ def create_figure(pallets, item_specs):
             name = layer['name']
             spec = item_specs[name]
             h = spec['h']
-            count = layer['count']
+            count = layer['count'] # その段にある実際の個数
             is_rem = (layer['type'] == 'rem')
             
             cols = spec['pattern']['cols']
@@ -214,33 +224,32 @@ def create_figure(pallets, item_specs):
             layer_w = cols * box_vis_w
             start_x = 150 + (1100 - layer_w) / 2
             
-            # 端数か満載かでスタイルを変える
             if is_rem:
                 edge_col = 'red'
                 line_sty = '--'
-                alpha_val = 0.4 # 少し薄くする
+                alpha_val = 0.4
                 line_w = 1.5
                 text_col = 'red'
                 label = f"{name}\n(端数: {count})"
-                # 端数エリア全体の枠も描画（任意）
-                # ax.add_patch(patches.Rectangle((150, current_h), 1100, h, fill=False, edgecolor='red', linestyle=':', alpha=0.3))
             else:
                 edge_col = 'black'
                 line_sty = '-'
-                alpha_val = 1.0 # くっきり
+                alpha_val = 1.0
                 line_w = 0.5
                 text_col = 'black'
                 label = f"{name}"
 
-            # 箱を1つずつ描画（端数でも箱の形を見せる）
-            for c in range(cols):
+            # 【修正】側面から見える箱の数を制限する
+            # パレットの幅方向に並ぶ最大数(cols)と、実際の残数(count)のうち、少ない方だけ描画する
+            visible_boxes = min(cols, count)
+            
+            for c in range(visible_boxes):
                 ax.add_patch(patches.Rectangle(
                     (start_x + c*box_vis_w, current_h), box_vis_w, h, 
                     facecolor=spec['color'], edgecolor=edge_col, 
                     linestyle=line_sty, linewidth=line_w, alpha=alpha_val
                 ))
             
-            # テキスト表示
             ax.text(700, current_h + h/2, label, ha='center', va='center', fontsize=8, color=text_col, fontweight='bold' if is_rem else 'normal')
 
             current_h += h

@@ -40,7 +40,7 @@ edited_df = st.data_editor(
         "W": st.column_config.NumberColumn("短辺 (mm)", min_value=1, format="%d"),
         "H": st.column_config.NumberColumn("高さ (mm)", min_value=1, format="%d"),
         "QTY": st.column_config.NumberColumn("数量 (cs)", min_value=1, format="%d"),
-        "Color": st.column_config.ColorColumn("表示色") # カラーピッカーを使用
+        "Color": "表示色", # 文字入力
     },
     use_container_width=True
 )

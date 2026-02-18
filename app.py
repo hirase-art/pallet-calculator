@@ -9,6 +9,38 @@ import io
 st.set_page_config(page_title="Palletize Calculator", layout="wide")
 
 # ==========================================
+# 0. 簡易パスワード認証 (門番)
+# ==========================================
+def check_password():
+    """Returns `True` if the user had the correct password."""
+
+    def password_entered():
+        """Checks whether a password entered by the user is correct."""
+        if st.session_state["password"] == st.secrets["PASSWORD"]:
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]  # パスワードをセッションから消す
+        else:
+            st.session_state["password_correct"] = False
+
+    # 認証済みならTrueを返す
+    if "password_correct" in st.session_state:
+        if st.session_state["password_correct"]:
+            return True
+
+    # 未認証ならパスワード入力画面を出す
+    st.text_input(
+        "パスワードを入力してください", type="password", on_change=password_entered, key="password"
+    )
+    
+    if "password_correct" in st.session_state and not st.session_state["password_correct"]:
+        st.error("😕 パスワードが違います")
+        
+    return False
+
+if not check_password():
+    st.stop()  # パスワードが合うまで、これ以降の処理を止める
+
+# ==========================================
 # 1. UI & 入力エリア
 # ==========================================
 st.title("📦 Palletize Calculator")

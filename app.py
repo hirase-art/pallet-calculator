@@ -157,7 +157,7 @@ def create_figure(pallets, item_specs):
         ax.text(600, 0, info_txt, ha='center', va='top', fontsize=9)
         col_idx += 1
 
-    # --- B. 側面図 ---
+# --- B. 側面図 ---
     for i, pallet in enumerate(pallets):
         ax = fig.add_subplot(gs[1, i])
         ax.set_title(f"Pallet #{i+1}", fontsize=12, fontweight='bold')
@@ -182,16 +182,34 @@ def create_figure(pallets, item_specs):
             layer_w = cols * box_vis_w
             start_x = 150 + (1100 - layer_w) / 2
             
+            # 端数か満載かでスタイルを変える
             if is_rem:
-                ax.add_patch(patches.Rectangle((150, current_h), 1100, h, facecolor=spec['color'], edgecolor='red', linestyle='--', alpha=0.3))
-                ax.text(700, current_h + h/2, f"{name} (端数: {count})", ha='center', va='center', fontsize=9, color='red', fontweight='bold')
+                edge_col = 'red'
+                line_sty = '--'
+                alpha_val = 0.4 # 少し薄くする
+                line_w = 1.5
+                text_col = 'red'
+                label = f"{name}\n(端数: {count})"
+                # 端数エリア全体の枠も描画（任意）
+                # ax.add_patch(patches.Rectangle((150, current_h), 1100, h, fill=False, edgecolor='red', linestyle=':', alpha=0.3))
             else:
-                for c in range(cols):
-                    ax.add_patch(patches.Rectangle(
-                        (start_x + c*box_vis_w, current_h), box_vis_w, h, 
-                        facecolor=spec['color'], edgecolor='black', lw=0.5
-                    ))
-                ax.text(700, current_h + h/2, f"{name}", ha='center', va='center', fontsize=8, alpha=0.5)
+                edge_col = 'black'
+                line_sty = '-'
+                alpha_val = 1.0 # くっきり
+                line_w = 0.5
+                text_col = 'black'
+                label = f"{name}"
+
+            # 箱を1つずつ描画（端数でも箱の形を見せる）
+            for c in range(cols):
+                ax.add_patch(patches.Rectangle(
+                    (start_x + c*box_vis_w, current_h), box_vis_w, h, 
+                    facecolor=spec['color'], edgecolor=edge_col, 
+                    linestyle=line_sty, linewidth=line_w, alpha=alpha_val
+                ))
+            
+            # テキスト表示
+            ax.text(700, current_h + h/2, label, ha='center', va='center', fontsize=8, color=text_col, fontweight='bold' if is_rem else 'normal')
 
             current_h += h
             

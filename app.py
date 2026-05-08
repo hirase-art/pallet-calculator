@@ -6,6 +6,36 @@ import pandas as pd
 import datetime
 import io
 
+# ==========================================
+# 箱マスタ取得 (Google Sheets)
+# ==========================================
+@st.cache_data(ttl=3600)
+def fetch_box_sizes():
+    url = (
+        "https://docs.google.com/spreadsheets/d/"
+        "1DaBUWx1X4TYWrx-3UjCI7zfE6dJNpAB7jlRIe3eiiHw"
+        "/export?format=csv&gid=1959918644"
+    )
+    try:
+        df = pd.read_csv(url, dtype=str)
+        boxes = {}
+        for _, row in df.iterrows():
+            try:
+                maker    = str(row.iloc[0]).strip()
+                box_type = str(row.iloc[1]).strip()
+                l = int(float(row.iloc[2]))
+                w = int(float(row.iloc[3]))
+                h = int(float(row.iloc[4]))
+                if maker in ("nan", "") and box_type in ("nan", ""):
+                    continue
+                label = f"{maker} / {box_type}" if maker not in ("nan", "") else box_type
+                boxes[label] = {"L": l, "W": w, "H": h}
+            except (ValueError, TypeError):
+                continue
+        return boxes
+    except Exception:
+        return {}
+
 # ページ設定 (ワイド表示)
 st.set_page_config(page_title="Palletize Calculator", layout="wide")
 
@@ -63,17 +93,55 @@ default_data = pd.DataFrame([
     {"Name": "Item-B", "L": 503, "W": 363, "H": 321, "QTY": 13, "Color": "#ffcc99"},
 ])
 
+# セッション状態の初期化
+if "box_data" not in st.session_state:
+    st.session_state.box_data = default_data.copy()
+if "editor_key" not in st.session_state:
+    st.session_state.editor_key = 0
+
+# 箱マスタから選択して追加
+box_master = fetch_box_sizes()
+if box_master:
+    with st.expander("📋 箱マスタから選択して追加"):
+        c1, c2, c3 = st.columns([4, 1, 1])
+        with c1:
+            selected_box = st.selectbox(
+                "箱を選択", ["-- 選択してください --"] + list(box_master.keys()),
+                key="box_selector"
+            )
+        with c2:
+            add_qty = st.number_input("数量 (cs)", min_value=1, value=1, key="add_qty")
+        with c3:
+            add_color = st.color_picker("表示色", "#aaccff", key="add_color")
+
+        if st.button("リストに追加", key="btn_add"):
+            if selected_box != "-- 選択してください --":
+                spec = box_master[selected_box]
+                new_row = pd.DataFrame([{
+                    "Name": selected_box,
+                    "L": spec["L"], "W": spec["W"], "H": spec["H"],
+                    "QTY": int(add_qty), "Color": add_color
+                }])
+                st.session_state.box_data = pd.concat(
+                    [st.session_state.box_data, new_row], ignore_index=True
+                )
+                st.session_state.editor_key += 1
+                st.rerun()
+else:
+    st.caption("⚠️ 箱マスタの読み込みに失敗しました。手動で入力してください。")
+
 # 編集可能なテーブルを表示
 edited_df = st.data_editor(
-    default_data,
-    num_rows="dynamic", # 行の追加削除を許可
+    st.session_state.box_data,
+    key=f"box_editor_{st.session_state.editor_key}",
+    num_rows="dynamic",
     column_config={
         "Name": "品名",
         "L": st.column_config.NumberColumn("長辺 (mm)", min_value=1, format="%d"),
         "W": st.column_config.NumberColumn("短辺 (mm)", min_value=1, format="%d"),
         "H": st.column_config.NumberColumn("高さ (mm)", min_value=1, format="%d"),
         "QTY": st.column_config.NumberColumn("数量 (cs)", min_value=1, format="%d"),
-        "Color": "表示色", # 文字入力
+        "Color": "表示色",
     },
     use_container_width=True
 )

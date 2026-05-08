@@ -9,15 +9,10 @@ import io
 # ==========================================
 # 箱マスタ取得 (Google Sheets)
 # ==========================================
-@st.cache_data(ttl=3600)
+@st.cache_data
 def fetch_box_sizes():
-    url = (
-        "https://docs.google.com/spreadsheets/d/"
-        "1DaBUWx1X4TYWrx-3UjCI7zfE6dJNpAB7jlRIe3eiiHw"
-        "/export?format=csv&gid=1959918644"
-    )
     try:
-        df = pd.read_csv(url, dtype=str)
+        df = pd.read_csv("boxes.csv", dtype=str)
         boxes = {}
         for _, row in df.iterrows():
             try:

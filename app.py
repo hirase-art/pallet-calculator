@@ -33,7 +33,8 @@ def fetch_box_sizes():
             except (ValueError, TypeError):
                 continue
         return boxes
-    except Exception:
+    except Exception as e:
+        st.warning(f"箱マスタ取得エラー: {e}")
         return {}
 
 # ページ設定 (ワイド表示)

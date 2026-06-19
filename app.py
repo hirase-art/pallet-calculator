@@ -623,6 +623,38 @@ PALLETIZING_PATTERNS = """
 """
 
 
+def _extract_json_object(text: str) -> str:
+    """
+    テキスト中から最初の { ～ 対応する } を抽出する。
+    Claude が JSON の前後に説明文を付けた場合や、コードブロックが混在する場合に対応。
+    """
+    start = text.find("{")
+    if start == -1:
+        return ""
+    depth = 0
+    in_string = False
+    escape_next = False
+    for i, ch in enumerate(text[start:], start):
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == "\\" and in_string:
+            escape_next = True
+            continue
+        if ch == '"' and not escape_next:
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    return ""
+
+
 def call_claude_for_pallet(coord_plan, user_instruction, pallet_w, pallet_d, pallet_h, limit_h):
     """
     Claude Opus に積付変更を依頼する。
@@ -665,17 +697,20 @@ JSONのみ返してください。マークダウン不要。
     try:
         response = client.messages.create(
             model="claude-opus-4-8",
-            max_tokens=8192,
+            max_tokens=32000,
             system=system_prompt,
             messages=[{"role": "user", "content": user_message}],
         )
         raw = response.content[0].text.strip()
 
-        # ```json ... ``` ブロックを除去
-        raw = re.sub(r"^```[a-z]*\n?", "", raw)
-        raw = re.sub(r"\n?```$", "", raw)
+        # テキスト中から最初の { ～ 最後の対応する } を抽出
+        # （Claudeが説明文をJSONの前後に付けた場合もこれで対処）
+        extracted = _extract_json_object(raw)
+        if not extracted:
+            preview = raw[:300] if raw else "(空のレスポンス)"
+            return None, f"JSONが見つかりませんでした。\n\nClaude の出力（先頭300文字）:\n{preview}", []
 
-        data = json.loads(raw)
+        data = json.loads(extracted)
         new_plan = data["modified_plan"]
         new_plan = recompute_z_bottoms(new_plan, pallet_h)
         explanation = data.get("explanation", "修正しました")
@@ -683,7 +718,8 @@ JSONのみ返してください。マークダウン不要。
         return new_plan, explanation, warnings
 
     except json.JSONDecodeError as e:
-        return None, f"JSON解析エラー（Claudeの出力形式が不正）: {e}", []
+        preview = extracted[:300] if "extracted" in dir() else raw[:300]
+        return None, f"JSON解析エラー: {e}\n\n解析対象（先頭300文字）:\n{preview}", []
     except KeyError as e:
         return None, f"レスポンス構造エラー: {e}", []
     except Exception as e:

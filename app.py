@@ -84,14 +84,26 @@ PALLET_D = st.sidebar.number_input("パレット奥行 (mm)", value=1100, step=1
 PALLET_H = st.sidebar.number_input("パレット高さ (mm)", value=150, step=10)
 LIMIT_H  = st.sidebar.number_input("高さ制限 (mm)", value=1550, step=50)
 
+st.sidebar.divider()
+st.sidebar.subheader("AI設定")
+AI_MODEL = st.sidebar.selectbox(
+    "モデル",
+    ["claude-opus-4-8", "claude-sonnet-4-6"],
+    help="Opus: 高精度・高コスト / Sonnet: 軽量・低コスト（開発・確認向け）"
+)
+
 # メインエリア：商品データ入力 (Data Editorを使用)
 st.subheader("積載する商品リスト")
 
-# デフォルトのデータフレーム
-default_data = pd.DataFrame([
-    {"Name": "Item-A", "L": 336, "W": 336, "H": 235, "QTY": 72, "Color": "#aaccff"},
-    {"Name": "Item-B", "L": 503, "W": 363, "H": 321, "QTY": 13, "Color": "#ffcc99"},
-])
+# デフォルトのデータフレーム（空）
+default_data = pd.DataFrame({
+    "Name": pd.Series([], dtype=str),
+    "L": pd.Series([], dtype=int),
+    "W": pd.Series([], dtype=int),
+    "H": pd.Series([], dtype=int),
+    "QTY": pd.Series([], dtype=int),
+    "Color": pd.Series([], dtype=str),
+})
 
 # セッション状態の初期化
 if "box_data" not in st.session_state:
@@ -151,6 +163,7 @@ edited_df = st.data_editor(
     },
     use_container_width=True
 )
+st.session_state.box_data = edited_df.copy()
 
 # ==========================================
 # 2. 計算ロジック (元のコードを移植)
@@ -753,7 +766,7 @@ def _extract_json_object(text: str) -> str:
     return ""
 
 
-def call_claude_for_pallet(coord_plan, user_instruction, pallet_w, pallet_d, pallet_h, limit_h):
+def call_claude_for_pallet(coord_plan, user_instruction, pallet_w, pallet_d, pallet_h, limit_h, model="claude-opus-4-8"):
     """
     Claude Opus に積付変更を依頼する。
     戻り値: (new_plan, explanation, warnings)
@@ -794,7 +807,7 @@ JSONのみ返してください。マークダウン不要。
 
     try:
         with client.messages.stream(
-            model="claude-opus-4-8",
+            model=model,
             max_tokens=16000,
             system=system_prompt,
             messages=[{"role": "user", "content": user_message}],
@@ -994,6 +1007,7 @@ if st.session_state.coord_plan is not None:
                 st.session_state.coord_plan,
                 instruction,
                 PALLET_W, PALLET_D, PALLET_H, LIMIT_H,
+                AI_MODEL,
             )
 
         if new_plan is not None:

@@ -212,6 +212,96 @@ def calculate_pallet_plan(input_data_dict, limit_h, pallet_h):
         
     return pallets, item_specs
 
+
+# ==========================================
+# Step 1: 座標ベースモデルへの変換
+# ==========================================
+
+def convert_to_coordinate_plan(pallets, item_specs, pallet_w, pallet_d, pallet_h):
+    """
+    段キュー形式の配置計画を、各箱に (x, y, z) 絶対座標を持つ形式に変換する。
+    原点: x=0 はパレット左端、y=0 は手前端、z=0 は床面。
+    箱グループはパレット上で中央揃え（既存の天面図描画と同じルール）。
+    """
+    coord_pallets = []
+
+    for pallet_data in pallets:
+        layers_out = []
+        current_z = pallet_h  # パレット板の上面から積み始める
+
+        for layer in pallet_data['layers']:
+            name = layer['name']
+            count = layer['count']
+            spec = item_specs[name]
+            pat = spec['pattern']
+
+            box_l = pat['box_w_view']  # x 方向の寸法
+            box_w = pat['box_d_view']  # y 方向の寸法
+            box_h = spec['h']
+
+            # ブロック全体をパレット中央に揃えるオフセット（既存天面図と一致）
+            group_w = pat['cols'] * box_l
+            group_d = pat['rows'] * box_w
+            offset_x = (pallet_w - group_w) / 2
+            offset_y = (pallet_d - group_d) / 2
+
+            # 列優先 (col-major) で count 個だけ展開
+            boxes = []
+            for i in range(count):
+                col = i // pat['rows']
+                row = i % pat['rows']
+                boxes.append({
+                    'name': name,
+                    'x': offset_x + col * box_l,
+                    'y': offset_y + row * box_w,
+                    'l': box_l,
+                    'w': box_w,
+                    'h': box_h,
+                    'color': spec['color'],
+                    'type': layer['type'],
+                })
+
+            layers_out.append({
+                'layer_index': len(layers_out),
+                'z_bottom': current_z,
+                'height': box_h,
+                'item_name': name,
+                'type': layer['type'],
+                'boxes': boxes,
+            })
+            current_z += box_h
+
+        coord_pallets.append({
+            'layers': layers_out,
+            'total_height': current_z,
+        })
+
+    return coord_pallets
+
+
+def validate_coord_plan(coord_pallets, pallet_w, pallet_d, limit_h):
+    """配置の境界チェック。エラーメッセージのリストを返す。"""
+    errors = []
+    for pi, pallet in enumerate(coord_pallets):
+        if pallet['total_height'] > limit_h:
+            errors.append(
+                f"PL#{pi+1}: 総高さ {pallet['total_height']}mm が制限 {limit_h}mm を超過"
+            )
+        for layer in pallet['layers']:
+            for box in layer['boxes']:
+                if box['x'] < 0 or box['x'] + box['l'] > pallet_w:
+                    errors.append(
+                        f"PL#{pi+1} {layer['layer_index']+1}段目 [{box['name']}]: "
+                        f"x方向がパレット外 ({box['x']:.0f}~{box['x']+box['l']:.0f}mm, 上限{pallet_w}mm)"
+                    )
+                if box['y'] < 0 or box['y'] + box['w'] > pallet_d:
+                    errors.append(
+                        f"PL#{pi+1} {layer['layer_index']+1}段目 [{box['name']}]: "
+                        f"y方向がパレット外 ({box['y']:.0f}~{box['y']+box['w']:.0f}mm, 上限{pallet_d}mm)"
+                    )
+    return errors
+
+
 def create_figure(pallets, item_specs):
     n_pallets = len(pallets)
     n_items = len(item_specs)
@@ -349,7 +439,55 @@ if st.button("計算して描画する", type="primary"):
     else:
         # 計算実行
         pallets, item_specs = calculate_pallet_plan(input_data_dict, LIMIT_H, PALLET_H)
-        
+
+        # ─── Step 1: 座標モデルへ変換・検証 ───────────────────────────
+        coord_plan = convert_to_coordinate_plan(pallets, item_specs, PALLET_W, PALLET_D, PALLET_H)
+        st.session_state.coord_plan = coord_plan
+        validation_errors = validate_coord_plan(coord_plan, PALLET_W, PALLET_D, LIMIT_H)
+
+        with st.expander("🔍 座標モデル確認（Step 1 検証）", expanded=True):
+            if validation_errors:
+                for err in validation_errors:
+                    st.error(err)
+            else:
+                st.success("✅ 全箱がパレット範囲内に収まっています")
+
+            # 段別サマリーテーブル
+            summary_rows = []
+            for pi, pallet in enumerate(coord_plan):
+                for layer in pallet['layers']:
+                    summary_rows.append({
+                        'PL': f"PL#{pi+1}",
+                        '段': layer['layer_index'] + 1,
+                        '品目': layer['item_name'],
+                        '種別': '満載' if layer['type'] == 'full' else '⚠️端数',
+                        '箱数': len(layer['boxes']),
+                        'z底面(mm)': int(layer['z_bottom']),
+                        '段高(mm)': int(layer['height']),
+                        'z天面(mm)': int(layer['z_bottom'] + layer['height']),
+                    })
+            st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
+
+            # 品目別合計チェック（入力数量 vs 配置数）
+            st.caption("品目別 配置箱数チェック")
+            placed_counts = {}
+            for pallet in coord_plan:
+                for layer in pallet['layers']:
+                    n = layer['item_name']
+                    placed_counts[n] = placed_counts.get(n, 0) + len(layer['boxes'])
+
+            check_rows = []
+            for name, spec in item_specs.items():
+                placed = placed_counts.get(name, 0)
+                check_rows.append({
+                    '品目': name,
+                    '入力数量': spec['total_qty'],
+                    '配置数': placed,
+                    '一致': '✅' if placed == spec['total_qty'] else '❌ 不一致',
+                })
+            st.dataframe(pd.DataFrame(check_rows), use_container_width=True, hide_index=True)
+        # ──────────────────────────────────────────────────────────────
+
         # 1. グラフ描画
         fig = create_figure(pallets, item_specs)
         if fig:

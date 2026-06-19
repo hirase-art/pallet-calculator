@@ -5,6 +5,10 @@ import japanize_matplotlib
 import pandas as pd
 import datetime
 import io
+import json
+import re
+import copy
+import anthropic
 
 # ==========================================
 # 箱マスタ取得 (Google Sheets)
@@ -94,6 +98,12 @@ if "box_data" not in st.session_state:
     st.session_state.box_data = default_data.copy()
 if "editor_key" not in st.session_state:
     st.session_state.editor_key = 0
+if "coord_plan" not in st.session_state:
+    st.session_state.coord_plan = None
+if "coord_plan_history" not in st.session_state:
+    st.session_state.coord_plan_history = []
+if "chat_messages" not in st.session_state:
+    st.session_state.chat_messages = []
 
 # 箱マスタから選択して追加
 box_master = fetch_box_sizes()
@@ -540,6 +550,89 @@ def create_side_views_v2(coord_plan, pallet_w, pallet_h, limit_h):
 
 
 # ==========================================
+# Step 3: Claude Opus 連携
+# ==========================================
+
+def recompute_z_bottoms(coord_plan, pallet_h):
+    """Claude が段を並べ替えた後に z_bottom を再計算する"""
+    for pallet in coord_plan:
+        z = pallet_h
+        for layer in pallet['layers']:
+            layer['z_bottom'] = z
+            layer['layer_index'] = pallet['layers'].index(layer)
+            for box in layer['boxes']:
+                box['h'] = layer['height']
+            z += layer['height']
+        pallet['total_height'] = z
+    return coord_plan
+
+
+def call_claude_for_pallet(coord_plan, user_instruction, pallet_w, pallet_d, pallet_h, limit_h):
+    """
+    Claude Opus に積付変更を依頼する。
+    戻り値: (new_plan, explanation, warnings)
+    エラー時: (None, error_message, [])
+    """
+    try:
+        client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
+    except Exception as e:
+        return None, f"ANTHROPIC_API_KEY が未設定です: {e}", []
+
+    plan_json = json.dumps(coord_plan, ensure_ascii=False)
+
+    system_prompt = f"""あなたはパレタイズの専門家AIです。
+ユーザーの指示に従い、パレット積付配置を修正してください。
+
+【座標系】
+- x: パレット幅方向（左端=0、右端={pallet_w}mm）
+- y: パレット奥行方向（手前=0、奥端={pallet_d}mm）
+- z: 高さ方向（床=0、パレット板上面={pallet_h}mmから積み始め）
+
+【制約】
+- 各箱は 0 ≤ x+l ≤ {pallet_w}、0 ≤ y+w ≤ {pallet_d} を守る
+- 同一段内で箱がxy平面上に重ならない
+- 各パレットの total_height ≤ {limit_h}mm
+
+【coord_plan の構造】
+pallets[] → layers[] → boxes[]
+  layer: layer_index(0始まり), z_bottom(mm), height(mm), item_name, type("full"/"rem")
+  box: name, x, y, l, w, h, color, type
+
+【出力形式】
+JSONのみ返してください。マークダウン不要。
+{{"modified_plan": <変更後の完全なcoord_plan>, "explanation": "変更内容の説明", "warnings": []}}"""
+
+    user_message = f"現在の配置:\n{plan_json}\n\n指示: {user_instruction}"
+
+    try:
+        response = client.messages.create(
+            model="claude-opus-4-8",
+            max_tokens=8192,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_message}],
+        )
+        raw = response.content[0].text.strip()
+
+        # ```json ... ``` ブロックを除去
+        raw = re.sub(r"^```[a-z]*\n?", "", raw)
+        raw = re.sub(r"\n?```$", "", raw)
+
+        data = json.loads(raw)
+        new_plan = data["modified_plan"]
+        new_plan = recompute_z_bottoms(new_plan, pallet_h)
+        explanation = data.get("explanation", "修正しました")
+        warnings = data.get("warnings", [])
+        return new_plan, explanation, warnings
+
+    except json.JSONDecodeError as e:
+        return None, f"JSON解析エラー（Claudeの出力形式が不正）: {e}", []
+    except KeyError as e:
+        return None, f"レスポンス構造エラー: {e}", []
+    except Exception as e:
+        return None, f"API呼び出しエラー: {e}", []
+
+
+# ==========================================
 # 3. 実行ボタン & 結果表示
 # ==========================================
 
@@ -610,44 +703,104 @@ if st.button("計算して描画する", type="primary"):
                 })
             st.dataframe(pd.DataFrame(check_rows), use_container_width=True, hide_index=True)
         # ──────────────────────────────────────────────────────────────
+        # 図・指示書・チャットはボタンブロック外のセクションで描画する
+        # 新規計算時にチャット履歴をリセット
+        st.session_state.chat_messages = []
+        st.session_state.coord_plan_history = []
 
-        # 1. グラフ描画（Step 2: 座標モデルベースの新描画）
-        fig_top = create_layer_topviews(coord_plan, PALLET_W, PALLET_D)
-        fig_side = create_side_views_v2(coord_plan, PALLET_W, PALLET_H, LIMIT_H)
 
-        if fig_top:
-            st.pyplot(fig_top)
-            plt.close(fig_top)
-        if fig_side:
-            st.pyplot(fig_side)
+# ==========================================
+# 4. 永続表示セクション（計算後・チャット後どちらでも再描画）
+# ==========================================
 
-            # 画像ダウンロードボタン（側面図）
-            fn = f"pallet_plan_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.png"
-            img_buf = io.BytesIO()
-            fig_side.savefig(img_buf, format='png', dpi=150)
-            st.download_button(label="画像をダウンロード（側面図）", data=img_buf, file_name=fn, mime="image/png")
-            plt.close(fig_side)
+if st.session_state.coord_plan is not None:
+    coord_plan = st.session_state.coord_plan
 
-        # 2. テキスト指示書
-        st.divider()
-        st.subheader("📝 積付指示書")
-        
-        # Streamlitのカラム機能で見やすく表示
-        cols = st.columns(len(pallets))
-        
-        for i, pallet in enumerate(pallets):
-            with cols[i]:
-                st.markdown(f"**Pallet #{i+1}**")
-                st.caption(f"総高さ: {pallet['current_h']}mm")
-                
-                # データフレームで見やすく表示するためのリスト作成
-                layers_data = []
-                for layer in reversed(pallet['layers']):
-                    l_type = "満載" if layer['type'] == 'full' else "⚠️端数"
-                    layers_data.append({
-                        "品目": layer['name'],
-                        "数量": f"{layer['count']}cs",
-                        "状態": l_type
-                    })
-                
-                st.table(layers_data)
+    # ─ 天面図（段別）＋側面図 ─────────────────────────────────────────
+    fig_top = create_layer_topviews(coord_plan, PALLET_W, PALLET_D)
+    fig_side = create_side_views_v2(coord_plan, PALLET_W, PALLET_H, LIMIT_H)
+
+    if fig_top:
+        st.pyplot(fig_top)
+        plt.close(fig_top)
+    if fig_side:
+        st.pyplot(fig_side)
+        fn = f"pallet_plan_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.png"
+        img_buf = io.BytesIO()
+        fig_side.savefig(img_buf, format='png', dpi=150)
+        st.download_button(
+            label="画像をダウンロード（側面図）",
+            data=img_buf, file_name=fn, mime="image/png",
+        )
+        plt.close(fig_side)
+
+    # ─ 積付指示書 ────────────────────────────────────────────────────
+    st.divider()
+    st.subheader("📝 積付指示書")
+    inst_cols = st.columns(len(coord_plan))
+    for pi, (pallet, col) in enumerate(zip(coord_plan, inst_cols)):
+        with col:
+            st.markdown(f"**Pallet #{pi+1}**")
+            st.caption(f"総高さ: {pallet['total_height']}mm")
+            layers_data = []
+            for layer in reversed(pallet['layers']):
+                l_type = "満載" if layer['type'] == 'full' else "⚠️端数"
+                layers_data.append({
+                    "品目": layer['item_name'],
+                    "数量": f"{len(layer['boxes'])}cs",
+                    "状態": l_type,
+                })
+            st.table(layers_data)
+
+    # ─ Claude チャット ────────────────────────────────────────────────
+    st.divider()
+    st.subheader("💬 積付指示 (Claude Opus)")
+    st.caption("例：「交互列積みにする」「1PL目3段目に端数のBを入れ込む」「PL4をPL3に統合する」")
+
+    # 元に戻すボタン（履歴があるときだけ表示）
+    if st.session_state.coord_plan_history:
+        if st.button("↩ 元に戻す"):
+            st.session_state.coord_plan = st.session_state.coord_plan_history.pop()
+            st.session_state.chat_messages.append({
+                "role": "assistant",
+                "content": "前の配置に戻しました。",
+                "warnings": [],
+            })
+            st.rerun()
+
+    # チャット履歴表示
+    for msg in st.session_state.chat_messages:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+            for w in msg.get("warnings", []):
+                st.warning(w)
+
+    # チャット入力
+    if instruction := st.chat_input("積付指示を入力..."):
+        st.session_state.chat_messages.append({"role": "user", "content": instruction})
+
+        with st.spinner("Claude が配置を検討中..."):
+            new_plan, explanation, warnings = call_claude_for_pallet(
+                st.session_state.coord_plan,
+                instruction,
+                PALLET_W, PALLET_D, PALLET_H, LIMIT_H,
+            )
+
+        if new_plan is not None:
+            st.session_state.coord_plan_history.append(
+                copy.deepcopy(st.session_state.coord_plan)
+            )
+            st.session_state.coord_plan = new_plan
+            # バリデーションエラーがあれば警告に追記
+            extra = validate_coord_plan(new_plan, PALLET_W, PALLET_D, LIMIT_H)
+            warnings.extend(extra)
+        else:
+            explanation = f"❌ {explanation}"
+            warnings = []
+
+        st.session_state.chat_messages.append({
+            "role": "assistant",
+            "content": explanation,
+            "warnings": warnings,
+        })
+        st.rerun()

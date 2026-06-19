@@ -281,9 +281,19 @@ def convert_to_coordinate_plan(pallets, item_specs, pallet_w, pallet_d, pallet_h
             })
             current_z += box_h
 
+        # 端数段(rem)を必ず最上段へ：full → rem の順に並べ替えて z_bottom を再計算
+        layers_out.sort(key=lambda l: 0 if l['type'] == 'full' else 1)
+        z = pallet_h
+        for layer in layers_out:
+            layer['z_bottom'] = z
+            layer['layer_index'] = layers_out.index(layer)
+            for box in layer['boxes']:
+                box['h'] = layer['height']
+            z += layer['height']
+
         coord_pallets.append({
             'layers': layers_out,
-            'total_height': current_z,
+            'total_height': z,
         })
 
     return coord_pallets
@@ -620,6 +630,30 @@ PALLETIZING_PATTERNS = """
 
 ■ 窓積み (Window Stacking)
   横向き列を2列配置し全箱が外から視認できる。検品最優先。
+
+【積付の基本原則】（パターン指示がない場合もここに従う）
+
+■ 安定性（トップヘビー禁止）
+  箱の体積が大きい・重量が重いと推定される品目を下段に配置する。
+  体積の小さい品目・端数段は上段に配置する。
+  「軽そうな品目の上に重そうな品目を積む」配置は警告を出すこと。
+
+■ パターンの優先順位とデフォルト
+  特段の指示がない場合はブロック積みを基本とする。
+  以下の要件がある場合にのみパターンを適用する:
+    - 冷蔵・冷凍品 → ピンホール積み
+    - 安定性強化・長距離輸送 → 交互列積みまたはレンガ積み
+    - 検品頻度が高い → 窓積みまたはレンガ積み
+  パターン適用が寸法的に不可能な場合（cols_B=0 など）はブロック積みで代替し、
+  warnings に「〇〇は寸法の制約でブロック積みに変更しました」と記載する。
+
+■ 端数段の配置
+  端数段（type="rem"）は必ずパレットの最上段に配置する。
+  端数段が下段になるような配置は禁止。
+
+■ 複数品目混載段（MIX段）
+  MIX段を作る場合、同一段内で箱が重ならないことを必ず確認する。
+  MIX段の item_name は "A + B" 形式で記載する。
 """
 
 

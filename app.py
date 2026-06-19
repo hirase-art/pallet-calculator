@@ -74,8 +74,8 @@ if not check_password():
 # ==========================================
 # 1. UI & 入力エリア
 # ==========================================
-st.title("📦 Palletize Calculator")
-st.markdown("箱のサイズと数量を入力して、最適なパレット積載プランを計算します。")
+st.title("📦 Palletize Calculator and Arrangement AI-Support")
+st.markdown("箱のサイズと数量を入力して、最適なパレット積載プランを計算し、意向をプロンプト入力しOpus4.8が最適配置を提案します。")
 
 # サイドバー：基本設定
 st.sidebar.header("基本設定")
@@ -87,6 +87,7 @@ LIMIT_H  = st.sidebar.number_input("高さ制限 (mm)", value=1550, step=50)
 # メインエリア：商品データ入力 (Data Editorを使用)
 st.subheader("積載する商品リスト")
 
+""""
 # デフォルトのデータフレーム
 default_data = pd.DataFrame([
     {"Name": "Item-A", "L": 336, "W": 336, "H": 235, "QTY": 72, "Color": "#aaccff"},
@@ -96,8 +97,12 @@ default_data = pd.DataFrame([
 # セッション状態の初期化
 if "box_data" not in st.session_state:
     st.session_state.box_data = default_data.copy()
-if "editor_key" not in st.session_state:
-    st.session_state.editor_key = 0
+"""
+# セッション状態の初期化
+if "box_data" not in st.session_state:
+    if "editor_key" not in st.session_state:
+        st.session_state.editor_key = 0
+    st.session_state.box_data = pd.DataFrame(columns=["Name", "L", "W", "H", "QTY", "Color"])
 if "coord_plan" not in st.session_state:
     st.session_state.coord_plan = None
 if "coord_plan_history" not in st.session_state:

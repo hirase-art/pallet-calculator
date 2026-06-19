@@ -695,13 +695,13 @@ JSONのみ返してください。マークダウン不要。
     user_message = f"現在の配置:\n{plan_json}\n\n指示: {user_instruction}"
 
     try:
-        response = client.messages.create(
+        with client.messages.stream(
             model="claude-opus-4-8",
-            max_tokens=32000,
+            max_tokens=16000,
             system=system_prompt,
             messages=[{"role": "user", "content": user_message}],
-        )
-        raw = response.content[0].text.strip()
+        ) as stream:
+            raw = stream.get_final_text().strip()
 
         # テキスト中から最初の { ～ 最後の対応する } を抽出
         # （Claudeが説明文をJSONの前後に付けた場合もこれで対処）

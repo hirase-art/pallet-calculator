@@ -416,6 +416,129 @@ def create_figure(pallets, item_specs):
     plt.tight_layout()
     return fig
 
+
+# ==========================================
+# Step 2: 座標モデルからの新描画関数
+# ==========================================
+
+def create_layer_topviews(coord_plan, pallet_w, pallet_d):
+    """各パレット × 各段の天面図グリッドを生成する（coord_plan ベース）"""
+    n_pallets = len(coord_plan)
+    max_layers = max(len(p['layers']) for p in coord_plan)
+    if max_layers == 0:
+        return None
+
+    cell_w = max(2.2, min(3.0, 18.0 / max_layers))
+    cell_h = 2.8
+    fig, axes = plt.subplots(
+        n_pallets, max_layers,
+        figsize=(max_layers * cell_w, n_pallets * cell_h),
+        squeeze=False,
+    )
+
+    for pi, pallet in enumerate(coord_plan):
+        for li in range(max_layers):
+            ax = axes[pi][li]
+            ax.set_xlim(-20, pallet_w + 20)
+            ax.set_ylim(-25, pallet_d + 20)
+            ax.set_aspect('equal')
+            ax.axis('off')
+
+            if li < len(pallet['layers']):
+                layer = pallet['layers'][li]
+                t_color = 'red' if layer['type'] == 'rem' else 'black'
+                ax.set_title(f"PL#{pi+1}  {li+1}段目", fontsize=8, color=t_color, pad=2)
+
+                # パレット外枠
+                ax.add_patch(patches.Rectangle(
+                    (0, 0), pallet_w, pallet_d,
+                    fill=False, edgecolor='#777777', lw=1.5,
+                ))
+
+                for box in layer['boxes']:
+                    edge = 'red' if box['type'] == 'rem' else '#222222'
+                    alpha = 0.5 if box['type'] == 'rem' else 0.75
+                    ax.add_patch(patches.Rectangle(
+                        (box['x'], box['y']), box['l'], box['w'],
+                        facecolor=box['color'], edgecolor=edge,
+                        linewidth=0.5, alpha=alpha,
+                    ))
+
+                ax.text(
+                    pallet_w / 2, -15,
+                    f"{len(layer['boxes'])}cs",
+                    ha='center', va='top', fontsize=7,
+                )
+            else:
+                ax.set_visible(False)
+
+    fig.suptitle("天面図（段別）", fontsize=10)
+    plt.tight_layout()
+    return fig
+
+
+def create_side_views_v2(coord_plan, pallet_w, pallet_h, limit_h):
+    """coord_plan から側面図（x-z 平面）を生成する"""
+    n_pallets = len(coord_plan)
+    if n_pallets == 0:
+        return None
+
+    fig, axes = plt.subplots(
+        1, n_pallets,
+        figsize=(max(n_pallets * 4, 8), 8),
+        squeeze=False,
+    )
+
+    view_offset = 150  # パレット左端のビュー x 座標
+
+    for pi, (pallet, ax) in enumerate(zip(coord_plan, axes[0])):
+        ax.set_title(f"Pallet #{pi+1}", fontsize=12, fontweight='bold')
+        ax.set_xlim(0, view_offset + pallet_w + view_offset)
+        ax.set_ylim(0, 1800)
+        ax.axis('off')
+
+        ax.axhline(y=0, color='black', lw=2)
+        ax.add_patch(patches.Rectangle(
+            (view_offset, 0), pallet_w, pallet_h,
+            facecolor='#8B4513', edgecolor='black',
+        ))
+
+        for layer in pallet['layers']:
+            z = layer['z_bottom']
+            h = layer['height']
+            is_rem = layer['type'] == 'rem'
+
+            edge_col = 'red' if is_rem else 'black'
+            line_sty = '--' if is_rem else '-'
+            alpha_val = 0.4 if is_rem else 1.0
+            line_w = 1.5 if is_rem else 0.5
+            text_col = 'red' if is_rem else 'black'
+
+            # y が大きい箱（奥）から先に描き、手前 (y 小) を前面に出す
+            for box in sorted(layer['boxes'], key=lambda b: -b['y']):
+                ax.add_patch(patches.Rectangle(
+                    (view_offset + box['x'], z), box['l'], h,
+                    facecolor=box['color'], edgecolor=edge_col,
+                    linestyle=line_sty, linewidth=line_w, alpha=alpha_val,
+                ))
+
+            label = layer['item_name'] + (" (端数)" if is_rem else "")
+            cx = view_offset + pallet_w / 2
+            ax.text(cx, z + h / 2, label,
+                    ha='center', va='center', fontsize=8,
+                    color=text_col, fontweight='bold' if is_rem else 'normal')
+
+        total_h = pallet['total_height']
+        cx = view_offset + pallet_w / 2
+        ax.text(cx, total_h + 30, f"H: {total_h}mm", ha='center', fontweight='bold')
+        ax.axhline(y=limit_h, color='red', linestyle='--', lw=1)
+        ax.text(view_offset + pallet_w + 40, limit_h, "Limit",
+                color='red', va='bottom', ha='left', fontsize=8)
+
+    plt.tight_layout()
+    return fig
+
+
 # ==========================================
 # 3. 実行ボタン & 結果表示
 # ==========================================
@@ -488,16 +611,22 @@ if st.button("計算して描画する", type="primary"):
             st.dataframe(pd.DataFrame(check_rows), use_container_width=True, hide_index=True)
         # ──────────────────────────────────────────────────────────────
 
-        # 1. グラフ描画
-        fig = create_figure(pallets, item_specs)
-        if fig:
-            st.pyplot(fig)
-            
-            # 画像ダウンロードボタン
+        # 1. グラフ描画（Step 2: 座標モデルベースの新描画）
+        fig_top = create_layer_topviews(coord_plan, PALLET_W, PALLET_D)
+        fig_side = create_side_views_v2(coord_plan, PALLET_W, PALLET_H, LIMIT_H)
+
+        if fig_top:
+            st.pyplot(fig_top)
+            plt.close(fig_top)
+        if fig_side:
+            st.pyplot(fig_side)
+
+            # 画像ダウンロードボタン（側面図）
             fn = f"pallet_plan_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.png"
             img_buf = io.BytesIO()
-            fig.savefig(img_buf, format='png', dpi=150)
-            st.download_button(label="画像をダウンロード", data=img_buf, file_name=fn, mime="image/png")
+            fig_side.savefig(img_buf, format='png', dpi=150)
+            st.download_button(label="画像をダウンロード（側面図）", data=img_buf, file_name=fn, mime="image/png")
+            plt.close(fig_side)
 
         # 2. テキスト指示書
         st.divider()

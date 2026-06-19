@@ -87,22 +87,17 @@ LIMIT_H  = st.sidebar.number_input("高さ制限 (mm)", value=1550, step=50)
 # メインエリア：商品データ入力 (Data Editorを使用)
 st.subheader("積載する商品リスト")
 
-""""
 # デフォルトのデータフレーム
-# default_data = pd.DataFrame([
-#    {"Name": "Item-A", "L": 336, "W": 336, "H": 235, "QTY": 72, "Color": "#aaccff"},
-#    {"Name": "Item-B", "L": 503, "W": 363, "H": 321, "QTY": 13, "Color": "#ffcc99"},
-#])
+default_data = pd.DataFrame([
+    {"Name": "Item-A", "L": 336, "W": 336, "H": 235, "QTY": 72, "Color": "#aaccff"},
+    {"Name": "Item-B", "L": 503, "W": 363, "H": 321, "QTY": 13, "Color": "#ffcc99"},
+])
 
 # セッション状態の初期化
 if "box_data" not in st.session_state:
     st.session_state.box_data = default_data.copy()
-"""
-# セッション状態の初期化
-if "box_data" not in st.session_state:
-    if "editor_key" not in st.session_state:
-        st.session_state.editor_key = 0
-    st.session_state.box_data = pd.DataFrame(columns=["Name", "L", "W", "H", "QTY", "Color"])
+if "editor_key" not in st.session_state:
+    st.session_state.editor_key = 0
 if "coord_plan" not in st.session_state:
     st.session_state.coord_plan = None
 if "coord_plan_history" not in st.session_state:

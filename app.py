@@ -89,10 +89,10 @@ st.subheader("積載する商品リスト")
 
 """"
 # デフォルトのデータフレーム
-default_data = pd.DataFrame([
-    {"Name": "Item-A", "L": 336, "W": 336, "H": 235, "QTY": 72, "Color": "#aaccff"},
-    {"Name": "Item-B", "L": 503, "W": 363, "H": 321, "QTY": 13, "Color": "#ffcc99"},
-])
+# default_data = pd.DataFrame([
+#    {"Name": "Item-A", "L": 336, "W": 336, "H": 235, "QTY": 72, "Color": "#aaccff"},
+#    {"Name": "Item-B", "L": 503, "W": 363, "H": 321, "QTY": 13, "Color": "#ffcc99"},
+#])
 
 # セッション状態の初期化
 if "box_data" not in st.session_state:

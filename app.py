@@ -567,6 +567,62 @@ def recompute_z_bottoms(coord_plan, pallet_h):
     return coord_plan
 
 
+# 積付パターン定義辞書（座標モデル向け変換ルール）
+PALLETIZING_PATTERNS = """
+【積付パターン定義】
+箱グループはパレット上で常に中央揃え:
+  offset_x = (pallet_w - cols * box_l) / 2
+  offset_y = (pallet_d - rows * box_w) / 2
+列優先(col-major)で展開: i番目の箱 → col = i // rows, row = i % rows
+
+■ ブロック積み (Block Stacking)
+  全段: 全箱を同一方向。cols/rows/向きは段をまたいで変えない。
+
+■ 交互列積み (Interlock / Cross Stacking)
+  layer_index 偶数段(0,2,4...): 元の向き (l=orig_l, w=orig_w)
+    cols_A = pallet_w // orig_l, rows_A = pallet_d // orig_w
+  layer_index 奇数段(1,3,5...): 90度回転 (l=orig_w, w=orig_l)
+    cols_B = pallet_w // orig_w, rows_B = pallet_d // orig_l
+  各段で offset を再計算して中央揃え。
+  条件: cols_B≥1 かつ rows_B≥1 であること。
+
+■ レンガ積み (Brick Stacking)
+  各段内: 左 half_cols 列を縦向き(l=orig_l)、残りを横向き(l=orig_w)で混在。
+  段ごとに左右反転(180度): col → cols-1-col, row → rows-1-row。
+  外観: 壁のレンガ模様。安定性高く検品しやすい。倉庫納品標準。
+
+■ ピンホール積み / 風車積み (Pinhole / Pinwheel Stacking)
+  用途: 冷蔵・冷凍品の通気確保。中央に縦貫通気孔を設ける。
+
+  デフォルト動作（指示がない場合はこれを適用）:
+    1. 通常の cols×rows グリッドを算出。
+    2. 以下の「中央除外ゾーン」に該当する箱を配置しない:
+         center_cols = { cols//2 }              # cols が奇数の場合
+         center_cols = { cols//2-1, cols//2 }   # cols が偶数の場合
+         center_rows = { rows//2 }              # rows が奇数の場合
+         center_rows = { rows//2-1, rows//2 }   # rows が偶数の場合
+       除外条件: col in center_cols AND row in center_rows
+    3. 段ごとに180度反転(col→cols-1-col, row→rows-1-row)。
+       通気孔は中央対称なため反転後も同位置 → 全段で縦貫通気孔を維持。
+
+  具体例(3×3グリッド, 除外1箱):
+    偶数段: (0,0)(1,0)(2,0)(0,1)除外(2,1)(0,2)(1,2)(2,2) → 8箱
+    奇数段: 同上を180度反転 → 8箱(通気孔は中央のまま)
+
+  ユーザー指示で調整可能:
+    「通気孔を大きくして」  → center_cols/center_rows の除外範囲を各1列/行拡大
+    「通気孔を2列にして」  → center_cols を 2列に指定
+    「縦通気孔を1列にして」→ center_cols を 1列に制限
+
+■ スプリット積み (Split Stacking)
+  レンガ積みの変形。横向き列の内側に隙間を設けパレット外形を合わせる。
+  外周フラット、隙間は内部。寸法が合わない品に使用。
+
+■ 窓積み (Window Stacking)
+  横向き列を2列配置し全箱が外から視認できる。検品最優先。
+"""
+
+
 def call_claude_for_pallet(coord_plan, user_instruction, pallet_w, pallet_d, pallet_h, limit_h):
     """
     Claude Opus に積付変更を依頼する。
@@ -597,6 +653,8 @@ def call_claude_for_pallet(coord_plan, user_instruction, pallet_w, pallet_d, pal
 pallets[] → layers[] → boxes[]
   layer: layer_index(0始まり), z_bottom(mm), height(mm), item_name, type("full"/"rem")
   box: name, x, y, l, w, h, color, type
+
+{PALLETIZING_PATTERNS}
 
 【出力形式】
 JSONのみ返してください。マークダウン不要。

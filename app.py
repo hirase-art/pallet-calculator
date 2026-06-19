@@ -559,6 +559,70 @@ def create_side_views_v2(coord_plan, pallet_w, pallet_h, limit_h):
     return fig
 
 
+def create_instruction_figure(coord_plan):
+    """積付指示書をmatplotlibのテーブルで描画（PDF出力用）"""
+    from matplotlib.backends.backend_pdf import PdfPages  # noqa: F401（import確認用）
+    n = len(coord_plan)
+    fig, axes = plt.subplots(1, n, figsize=(max(n * 4.5, 9), 7), squeeze=False)
+
+    for pi, (pallet, ax) in enumerate(zip(coord_plan, axes[0])):
+        ax.axis('off')
+        ax.set_title(
+            f"Pallet #{pi+1}   総高さ: {pallet['total_height']}mm",
+            fontsize=11, fontweight='bold', pad=12,
+        )
+
+        rows = list(reversed(pallet['layers']))  # 上段→下段の順で記載
+        table_data, cell_colors = [], []
+        for layer in rows:
+            is_rem = layer['type'] == 'rem'
+            l_type = '⚠ 端数' if is_rem else '満載'
+            table_data.append([layer['item_name'], f"{len(layer['boxes'])} cs", l_type])
+            bg = '#ffe8e8' if is_rem else '#f5f9ff'
+            cell_colors.append([bg, bg, bg])
+
+        if not table_data:
+            continue
+
+        tbl = ax.table(
+            cellText=table_data,
+            colLabels=['品目', '数量', '状態'],
+            cellColours=cell_colors,
+            colColours=['#dce6f1'] * 3,
+            cellLoc='center',
+            loc='upper center',
+        )
+        tbl.auto_set_font_size(False)
+        tbl.set_fontsize(10)
+        tbl.scale(1.1, 2.0)
+
+    fig.suptitle('積付指示書', fontsize=13, fontweight='bold', y=0.98)
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    return fig
+
+
+def generate_pdf(coord_plan, pallet_w, pallet_d, pallet_h, limit_h):
+    """天面図・側面図・積付指示書を3ページにまとめたPDFをBytesIOで返す"""
+    from matplotlib.backends.backend_pdf import PdfPages
+    buf = io.BytesIO()
+    with PdfPages(buf) as pdf:
+        for creator_fn, kwargs in [
+            (create_layer_topviews,  dict(coord_plan=coord_plan, pallet_w=pallet_w, pallet_d=pallet_d)),
+            (create_side_views_v2,   dict(coord_plan=coord_plan, pallet_w=pallet_w, pallet_h=pallet_h, limit_h=limit_h)),
+            (create_instruction_figure, dict(coord_plan=coord_plan)),
+        ]:
+            fig = creator_fn(**kwargs)
+            if fig:
+                pdf.savefig(fig, bbox_inches='tight')
+                plt.close(fig)
+        # メタデータ
+        d = pdf.infodict()
+        d['Title'] = 'Palletize Plan'
+        d['Subject'] = 'Pallet loading instruction'
+    buf.seek(0)
+    return buf
+
+
 # ==========================================
 # Step 3: Claude Opus 連携
 # ==========================================
@@ -853,14 +917,32 @@ if st.session_state.coord_plan is not None:
         plt.close(fig_top)
     if fig_side:
         st.pyplot(fig_side)
-        fn = f"pallet_plan_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.png"
-        img_buf = io.BytesIO()
-        fig_side.savefig(img_buf, format='png', dpi=150)
-        st.download_button(
-            label="画像をダウンロード（側面図）",
-            data=img_buf, file_name=fn, mime="image/png",
-        )
         plt.close(fig_side)
+
+    # ─ ダウンロードボタン ────────────────────────────────────────────
+    ts = datetime.datetime.now().strftime('%Y%m%d_%H%M')
+    dl_col1, dl_col2 = st.columns(2)
+    with dl_col1:
+        pdf_buf = generate_pdf(coord_plan, PALLET_W, PALLET_D, PALLET_H, LIMIT_H)
+        st.download_button(
+            label="📄 PDFをダウンロード（天面図・側面図・指示書）",
+            data=pdf_buf,
+            file_name=f"pallet_plan_{ts}.pdf",
+            mime="application/pdf",
+            use_container_width=True,
+        )
+    with dl_col2:
+        fig_side_dl = create_side_views_v2(coord_plan, PALLET_W, PALLET_H, LIMIT_H)
+        img_buf = io.BytesIO()
+        fig_side_dl.savefig(img_buf, format='png', dpi=150)
+        plt.close(fig_side_dl)
+        st.download_button(
+            label="🖼 PNGをダウンロード（側面図のみ）",
+            data=img_buf,
+            file_name=f"pallet_side_{ts}.png",
+            mime="image/png",
+            use_container_width=True,
+        )
 
     # ─ 積付指示書 ────────────────────────────────────────────────────
     st.divider()
